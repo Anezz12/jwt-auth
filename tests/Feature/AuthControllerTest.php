@@ -10,9 +10,10 @@ class AuthControllerTest extends TestCase
 {
   public function testRegister()
   {
+
     $this->json('POST', '/api/register')
-         ->assertStatus(200)
-         ->assertJson(['message' => 'Register']);
+         ->assertStatus(422)
+         ->assertJsonValidationErrors(['name', 'email', 'password']);
 
   }
 }

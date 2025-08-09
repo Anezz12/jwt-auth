@@ -15,12 +15,14 @@ class AuthController extends Controller
             'name' => 'required|string|max:255',
             'email' => 'required|string|email|max:255|unique:users',
             'password' => 'required|string|min:8|confirmed',
+            'role' => 'required|in:admin,user', // Assuming you have roles
         ]);
 
         $user = User::create([
             'name' => $request->name,
             'email' => $request->email,
             'password' => Hash::make($request->password),
+            'role' => $request->role,
         ]);
 
         $token = Auth::login(user: $user);
@@ -48,7 +50,7 @@ class AuthController extends Controller
         if (!$token) {
             return response()->json(data: [
                 'status' => 'error',
-                'message' => 'Unauthorized',
+                'message' => 'Email atau Password salah',
             ], status: 401);
         }
 
@@ -59,6 +61,7 @@ class AuthController extends Controller
             'user' => $user,
             'authorization' => [
                 'token' => $token,
+                'expires_in' => Auth::factory()->getTTL() * 60,
                 'type' => 'bearer',
             ]
         ]);

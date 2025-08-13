@@ -142,65 +142,6 @@ class AuthController extends Controller
     }
 
     /**
-     * Handle OAuth callback
-     */
-
-    //  public function handleProviderCallback($provider)
-    //  {
-    //     // fix HTTP CLIENT
-    //     try {
-    //         $socialUser = Socialite::driver($provider)
-    //          ->stateless()
-    //          ->setHttpClient(new \GuzzleHttp\Client(['verify' => false]))
-    //         ->user();
-
-    //         // Check if user already exist
-    //         $existingUser = User::where('email', $socialUser->getEmail())->first();
-
-    //          if ($existingUser) {
-    //             // Update provider info if needed
-    //             $existingUser->update([
-    //                 'provider' => $provider,
-    //                 'provider_id' => $socialUser->getId(),
-    //                 'avatar' => $socialUser->getAvatar(),
-    //             ]);
-
-    //             $user = $existingUser;
-    //     } else {
-    //             // Create new user
-    //             $user = User::create([
-    //                 'name' => $socialUser->getName(),
-    //                 'email' => $socialUser->getEmail(),
-    //                 'provider' => $provider,
-    //                 'provider_id' => $socialUser->getId(),
-    //                 'avatar' => $socialUser->getAvatar(),
-    //                 'role' => 'user',
-    //                 'password' => '',
-    //                 'email_verified_at' => now(),
-    //             ]);
-    //         }
-    //     // Generate JWT token
-    //         $token = Auth::login($user);
-
-    //         return response()->json([
-    //             'status' => 'success',
-    //             'message' => 'OAuth login successful',
-    //             'user' => $user,
-    //             'authorization' => [
-    //                 'token' => $token,
-    //                 'expires_in' => Auth::factory()->getTTL() * 60,
-    //                 'type' => 'bearer',
-    //             ]
-    //         ]);
-    //  } catch (\Exception $e) {
-    //         return response()->json([
-    //             'status' => 'error',
-    //             'message' => 'OAuth login failed: ' . $e->getMessage()
-    //         ], 500);
-    //     }
-    // }
-
-    /**
      * Handle OAuth callback Google
      */
     public function exchangeGoogleCode(Request $request)
@@ -214,7 +155,7 @@ class AuthController extends Controller
             // Exchange code for user info
             $socialUser = Socialite::driver('google')
                 ->stateless()
-                ->setHttpClient(new \GuzzleHttp\Client(['verify' => false]))
+                ->setHttpClient(new \GuzzleHttp\Client(['verify' => true]))
                 ->user();
 
             $existingUser = User::where('email', $socialUser->getEmail())->first();
@@ -234,7 +175,7 @@ class AuthController extends Controller
                     'provider_id' => $socialUser->getId(),
                     'avatar' => $socialUser->getAvatar(),
                     'role' => 'user',
-                    'password' => Hash::make(\Illuminate\Support\Str::random(24)), // ✅ Fix password
+                    'password' => Hash::make(\Illuminate\Support\Str::random(24)),
                     'email_verified_at' => now(),
                 ]);
             }

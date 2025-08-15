@@ -155,7 +155,7 @@ class AuthController extends Controller
             // Exchange code for user info
             $socialUser = Socialite::driver('google')
                 ->stateless()
-                ->setHttpClient(new \GuzzleHttp\Client(['verify' => true]))
+                ->setHttpClient(new \GuzzleHttp\Client(['verify' => false]))
                 ->user();
 
             $existingUser = User::where('email', $socialUser->getEmail())->first();
@@ -169,7 +169,7 @@ class AuthController extends Controller
                 $user = $existingUser;
             } else {
                 $user = User::create([
-                    'name' => $socialUser->getName() ?: 'User',
+                    'name' => $socialUser->getName(),
                     'email' => $socialUser->getEmail(),
                     'provider' => 'google',
                     'provider_id' => $socialUser->getId(),

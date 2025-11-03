@@ -3,9 +3,12 @@
 namespace App\Http\Controllers;
 
 use App\Models\User;
+use Illuminate\Auth\Events\PasswordReset;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Password;
+use Illuminate\Support\Str;
 use Laravel\Socialite\Facades\Socialite;
 
 class AuthController extends Controller
@@ -46,6 +49,15 @@ class AuthController extends Controller
             'password' => 'required|string',
         ]);
 
+        $user = User::where('email', $request->email)->first();
+
+        if ($user && $user->provider) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Email ini terdaftar menggunakan login '.ucfirst($user->provider).', silakan gunakan metode tersebut.',
+            ], 409);
+        }
+
         $credentials = $request->only('email', 'password');
 
         $token = Auth::attempt($credentials);
@@ -69,6 +81,89 @@ class AuthController extends Controller
             ],
         ]);
 
+    }
+
+    public function forgotPassword(Request $request)
+    {
+        $request->validate([
+            'email' => 'required|string|email',
+        ]);
+
+        $user = User::where('email', $request->email)->first();
+
+        if ($user && ($user->provider === 'google' || $user->provider === 'github')) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Reset password tidak tersedia untuk akun ini.',
+            ], 409);
+        }
+
+        $status = Password::sendResetLink($request->only('email'));
+
+        if ($status === Password::RESET_LINK_SENT) {
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Link reset password telah dikirim ke email Anda.',
+            ]);
+        }
+
+        if ($status === Password::RESET_THROTTLED) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Terlalu banyak percobaan reset password. Silakan coba lagi beberapa menit lagi.',
+            ], 429);
+        }
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Jika email terdaftar, link reset password telah dikirim.',
+        ]);
+    }
+
+    public function resetPassword(Request $request)
+    {
+        $request->validate([
+            'token' => 'required|string',
+            'email' => 'required|string|email',
+            'password' => 'required|string|min:8|confirmed',
+        ]);
+
+        $user = User::where('email', $request->email)->first();
+
+        if ($user && ($user->provider === 'google' || $user->provider === 'github')) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Reset password tidak tersedia untuk akun ini.',
+            ], 409);
+        }
+
+        $status = Password::reset(
+            $request->only('email', 'password', 'password_confirmation', 'token'),
+            function ($user) use ($request) {
+                $user->forceFill([
+                    'password' => Hash::make($request->password),
+                ])->setRememberToken(Str::random(60));
+
+                $user->provider = null;
+                $user->provider_id = null;
+
+                $user->save();
+
+                event(new PasswordReset($user));
+            }
+        );
+
+        if ($status === Password::PASSWORD_RESET) {
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Password berhasil direset. Silakan login dengan password baru Anda.',
+            ]);
+        }
+
+        return response()->json([
+            'status' => 'error',
+            'message' => 'Token reset password tidak valid atau sudah kadaluarsa.',
+        ], 422);
     }
 
     public function logout(Request $request)
@@ -161,11 +256,25 @@ class AuthController extends Controller
             $existingUser = User::where('email', $socialUser->getEmail())->first();
 
             if ($existingUser) {
+                if ($existingUser->provider && $existingUser->provider !== 'google') {
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => 'Email ini sudah terhubung dengan login '.ucfirst($existingUser->provider).'. Silakan gunakan metode tersebut.',
+                    ], 409);
+                }
+
+                if (! $existingUser->provider) {
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => 'Email ini sudah terdaftar dengan login biasa. Silakan gunakan email & password.',
+                    ], 409);
+                }
+
                 $existingUser->update([
-                    'provider' => 'google',
                     'provider_id' => $socialUser->getId(),
                     'avatar' => $socialUser->getAvatar(),
                 ]);
+
                 $user = $existingUser;
             } else {
                 $user = User::create([
@@ -175,7 +284,7 @@ class AuthController extends Controller
                     'provider_id' => $socialUser->getId(),
                     'avatar' => $socialUser->getAvatar(),
                     'role' => 'user',
-                    'password' => Hash::make(\Illuminate\Support\Str::random(24)),
+                    'password' => Hash::make(Str::random(24)),
                     'email_verified_at' => now(),
                 ]);
             }
@@ -221,11 +330,25 @@ class AuthController extends Controller
             $existingUser = User::where('email', $socialUser->getEmail())->first();
 
             if ($existingUser) {
+                if ($existingUser->provider && $existingUser->provider !== 'github') {
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => 'Email ini sudah terhubung dengan login '.ucfirst($existingUser->provider).'. Silakan gunakan metode tersebut.',
+                    ], 409);
+                }
+
+                if (! $existingUser->provider) {
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => 'Email ini sudah terdaftar dengan login biasa. Silakan gunakan email & password.',
+                    ], 409);
+                }
+
                 $existingUser->update([
-                    'provider' => 'github',
                     'provider_id' => $socialUser->getId(),
                     'avatar' => $socialUser->getAvatar(),
                 ]);
+
                 $user = $existingUser;
             } else {
                 $user = User::create([
@@ -235,7 +358,7 @@ class AuthController extends Controller
                     'provider_id' => $socialUser->getId(),
                     'avatar' => $socialUser->getAvatar(),
                     'role' => 'user',
-                    'password' => Hash::make(\Illuminate\Support\Str::random(24)), // ✅ Fix password
+                    'password' => Hash::make(Str::random(24)),
                     'email_verified_at' => now(),
                 ]);
             }

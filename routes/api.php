@@ -6,7 +6,9 @@ use Illuminate\Support\Facades\Route;
 // Regular Auth
 Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);
-
+Route::post('/user', [AuthController::class, 'user']);
+Route::post('/password/forgot', [AuthController::class, 'forgotPassword']);
+Route::post('/password/reset', [AuthController::class, 'resetPassword']);
 // OAuth Routes Google
 Route::get('/auth/{provider}', [AuthController::class, 'redirectToProvider']);
 Route::post('/auth/google/exchange', [AuthController::class, 'exchangeGoogleCode']);
@@ -21,4 +23,5 @@ Route::middleware('auth:api')->group(function () {
     Route::post('/refresh', [AuthController::class, 'refresh']);
     Route::get('/user', [AuthController::class, 'user']);
     Route::post('/unlink-provider', [AuthController::class, 'unlinkProvider']);
+
 });

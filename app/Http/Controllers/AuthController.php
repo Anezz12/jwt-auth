@@ -91,6 +91,13 @@ class AuthController extends Controller
 
         $user = User::where('email', $request->email)->first();
 
+        if (! $user) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Email tidak terdaftar.',
+            ], 404);
+        }
+
         if ($user && ($user->provider === 'google' || $user->provider === 'github')) {
             return response()->json([
                 'status' => 'error',

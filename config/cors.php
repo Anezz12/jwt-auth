@@ -30,6 +30,7 @@ return [
         'X-Requested-With',
         'Origin',
         'X-CSRF-TOKEN',
+        'X-XSRF-TOKEN',
     ],
     'exposed_headers' => [],
 

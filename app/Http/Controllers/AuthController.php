@@ -3,391 +3,299 @@
 namespace App\Http\Controllers;
 
 use App\Models\User;
-use Illuminate\Auth\Events\PasswordReset;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use Laravel\Socialite\Facades\Socialite;
 
 class AuthController extends Controller
 {
+    // Regular Authentication
+
     public function register(Request $request)
     {
         $request->validate([
             'name' => 'required|string|max:255',
             'email' => 'required|string|email|max:255|unique:users',
             'password' => 'required|string|min:8|confirmed',
-            'role' => 'required|in:admin,user',
         ]);
 
         $user = User::create([
             'name' => $request->name,
             'email' => $request->email,
             'password' => Hash::make($request->password),
-            'role' => $request->role,
+            'role' => 'user',
         ]);
 
-        $token = Auth::login(user: $user);
+        $token = $user->createToken('auth-token')->plainTextToken;
 
         return response()->json([
-            'status' => 'success',
-            'message' => 'Register',
-            'user' => $user,
-            'authorization' => [
+            'success' => true,
+            'message' => 'Registration successful',
+            'data' => [
+                'user' => $user,
                 'token' => $token,
-                'type' => 'bearer',
+                'token_type' => 'Bearer',
             ],
-        ]);
+        ], 201);
     }
 
     public function login(Request $request)
     {
         $request->validate([
-            'email' => 'required|string|email',
-            'password' => 'required|string',
+            'email' => 'required|email',
+            'password' => 'required',
         ]);
 
         $user = User::where('email', $request->email)->first();
 
-        if ($user && $user->provider) {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'Email ini terdaftar menggunakan login '.ucfirst($user->provider).', silakan gunakan metode tersebut.',
-            ], 409);
+        if (! $user || ! Hash::check($request->password, $user->password)) {
+            throw ValidationException::withMessages([
+                'email' => ['The provided credentials are incorrect.'],
+            ]);
         }
 
-        $credentials = $request->only('email', 'password');
+        $user->tokens()->delete();
 
-        $token = Auth::attempt($credentials);
-        if (! $token) {
-            return response()->json(data: [
-                'status' => 'error',
-                'message' => 'Email atau Password salah',
-            ], status: 401);
-        }
+        $token = $user->createToken('auth-token')->plainTextToken;
 
-        $user = Auth::user();
-
-        return response()->json(data: [
-            'status' => 'success',
+        return response()->json([
+            'success' => true,
             'message' => 'Login successful',
-            'user' => $user,
-            'authorization' => [
+            'data' => [
+                'user' => $user,
                 'token' => $token,
-                'expires_in' => Auth::factory()->getTTL() * 60,
-                'type' => 'bearer',
+                'token_type' => 'Bearer',
             ],
         ]);
-
     }
+
+    public function logout(Request $request)
+    {
+        $request->user()->currentAccessToken()->delete();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Logged out successfully',
+        ]);
+    }
+
+    public function user(Request $request)
+    {
+        return response()->json([
+            'success' => true,
+            'data' => $request->user(),
+        ]);
+    }
+
+    public function refresh(Request $request)
+    {
+        $user = $request->user();
+
+        $user->tokens()->delete();
+
+        $token = $user->createToken('auth-token')->plainTextToken;
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Token refreshed successfully',
+            'data' => [
+                'token' => $token,
+                'token_type' => 'Bearer',
+            ],
+        ]);
+    }
+
+    // Password Reset
 
     public function forgotPassword(Request $request)
     {
         $request->validate([
-            'email' => 'required|string|email',
+            'email' => 'required|email|exists:users,email',
         ]);
 
-        $user = User::where('email', $request->email)->first();
-
-        if (! $user) {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'Email tidak terdaftar.',
-            ], 404);
-        }
-
-        if ($user && ($user->provider === 'google' || $user->provider === 'github')) {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'Reset password tidak tersedia untuk akun ini.',
-            ], 409);
-        }
-
-        $status = Password::sendResetLink($request->only('email'));
+        $status = Password::sendResetLink(
+            $request->only('email')
+        );
 
         if ($status === Password::RESET_LINK_SENT) {
             return response()->json([
-                'status' => 'success',
-                'message' => 'Link reset password telah dikirim ke email Anda.',
+                'success' => true,
+                'message' => 'Password reset link sent to your email',
             ]);
         }
 
-        if ($status === Password::RESET_THROTTLED) {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'Terlalu banyak percobaan reset password. Silakan coba lagi beberapa menit lagi.',
-            ], 429);
-        }
-
         return response()->json([
-            'status' => 'success',
-            'message' => 'Jika email terdaftar, link reset password telah dikirim.',
-        ]);
+            'success' => false,
+            'message' => 'Unable to send reset link',
+        ], 500);
     }
 
     public function resetPassword(Request $request)
     {
         $request->validate([
-            'token' => 'required|string',
-            'email' => 'required|string|email',
+            'token' => 'required',
+            'email' => 'required|email',
             'password' => 'required|string|min:8|confirmed',
         ]);
 
-        $user = User::where('email', $request->email)->first();
-
-        if ($user && ($user->provider === 'google' || $user->provider === 'github')) {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'Reset password tidak tersedia untuk akun ini.',
-            ], 409);
-        }
-
         $status = Password::reset(
             $request->only('email', 'password', 'password_confirmation', 'token'),
-            function ($user) use ($request) {
+            function ($user, $password) {
                 $user->forceFill([
-                    'password' => Hash::make($request->password),
-                ])->setRememberToken(Str::random(60));
+                    'password' => Hash::make($password),
+                ])->save();
 
-                $user->provider = null;
-                $user->provider_id = null;
-
-                $user->save();
-
-                event(new PasswordReset($user));
+                $user->tokens()->delete();
             }
         );
 
         if ($status === Password::PASSWORD_RESET) {
             return response()->json([
-                'status' => 'success',
-                'message' => 'Password berhasil direset. Silakan login dengan password baru Anda.',
+                'success' => true,
+                'message' => 'Password has been reset successfully',
             ]);
         }
 
         return response()->json([
-            'status' => 'error',
-            'message' => 'Token reset password tidak valid atau sudah kadaluarsa.',
-        ], 422);
+            'success' => false,
+            'message' => __($status),
+        ], 500);
     }
 
-    public function logout(Request $request)
-    {
-        Auth::logout();
+    // OAuth - Google
 
+    public function redirectToProvider()
+    {
         return response()->json([
-            'status' => 'success',
-            'message' => 'Logged out successfully',
+            'url' => Socialite::driver('google')
+                ->stateless()
+                ->redirect()
+                ->getTargetUrl(),
         ]);
     }
 
-    public function refresh()
-    {
-        return response()->json([
-            'status' => 'success',
-            'user' => Auth::user(),
-            'authorization' => [
-                'token' => Auth::refresh(),
-                'type' => 'bearer',
-            ],
-        ]);
-    }
-
-    public function user()
-    {
-        if (! Auth::check()) {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'User not authenticated',
-            ], 401);
-        } else {
-            return response()->json([
-                'status' => 'success',
-                'user' => Auth::user(),
-            ]);
-        }
-    }
-
-    /**
-     * Redirect to OAuth provider
-     */
-    public function redirectToProvider($provider)
-    {
-        $validProviders = ['google', 'github', 'twitter'];
-
-        if (! in_array($provider, $validProviders)) {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'Invalid provider',
-            ], 400);
-        }
-
-        // Generate state untuk security
-        $state = base64_encode(json_encode([
-            'provider' => $provider,
-            'timestamp' => now()->timestamp,
-        ]));
-        $redirectUrl = Socialite::driver($provider)
-            ->stateless()
-            ->with(['state' => $state])
-            ->setHttpClient(new \GuzzleHttp\Client(['verify' => true]))
-            ->redirect()
-            ->getTargetUrl();
-
-        return response()->json([
-            'status' => 'success',
-            'redirect_url' => $redirectUrl,
-            'state' => $state,
-        ]);
-    }
-
-    /**
-     * Handle OAuth callback Google
-     */
     public function exchangeGoogleCode(Request $request)
     {
         $request->validate([
             'code' => 'required|string',
-            'state' => 'required|string',
         ]);
 
         try {
-            // Exchange code for user info
-            $socialUser = Socialite::driver('google')
+            $googleUser = Socialite::driver('google')
                 ->stateless()
-                ->setHttpClient(new \GuzzleHttp\Client(['verify' => false]))
                 ->user();
 
-            $existingUser = User::where('email', $socialUser->getEmail())->first();
-
-            if ($existingUser) {
-                if ($existingUser->provider && $existingUser->provider !== 'google') {
-                    return response()->json([
-                        'status' => 'error',
-                        'message' => 'Email ini sudah terhubung dengan login '.ucfirst($existingUser->provider).'. Silakan gunakan metode tersebut.',
-                    ], 409);
-                }
-
-                if (! $existingUser->provider) {
-                    return response()->json([
-                        'status' => 'error',
-                        'message' => 'Email ini sudah terdaftar dengan login biasa. Silakan gunakan email & password.',
-                    ], 409);
-                }
-
-                $existingUser->update([
-                    'provider_id' => $socialUser->getId(),
-                    'avatar' => $socialUser->getAvatar(),
-                ]);
-
-                $user = $existingUser;
-            } else {
-                $user = User::create([
-                    'name' => $socialUser->getName(),
-                    'email' => $socialUser->getEmail(),
-                    'provider' => 'google',
-                    'provider_id' => $socialUser->getId(),
-                    'avatar' => $socialUser->getAvatar(),
-                    'role' => 'user',
-                    'password' => Hash::make(Str::random(24)),
+            $user = User::updateOrCreate(
+                ['email' => $googleUser->email],
+                [
+                    'name' => $googleUser->name,
+                    'google_id' => $googleUser->id,
+                    'avatar' => $googleUser->avatar,
                     'email_verified_at' => now(),
-                ]);
-            }
+                    'password' => Hash::make(Str::random(24)),
+                ]
+            );
 
-            $token = Auth::login($user);
+            $token = $user->createToken('google-auth')->plainTextToken;
 
             return response()->json([
-                'status' => 'success',
-                'message' => 'OAuth login successful',
-                'user' => $user,
-                'authorization' => [
+                'success' => true,
+                'message' => 'Google authentication successful',
+                'data' => [
+                    'user' => $user,
                     'token' => $token,
-                    'expires_in' => Auth::factory()->getTTL() * 60,
-                    'type' => 'bearer',
+                    'token_type' => 'Bearer',
                 ],
             ]);
-
         } catch (\Exception $e) {
             return response()->json([
-                'status' => 'error',
-                'message' => 'OAuth exchange failed: '.$e->getMessage(),
-            ], 500);
+                'success' => false,
+                'message' => 'Google authentication failed',
+                'error' => $e->getMessage(),
+            ], 401);
         }
     }
 
-    /**
-     * Handle OAuth callback Github
-     */
+    // OAuth - GitHub
+
+    public function redirectToGithub()
+    {
+        return response()->json([
+            'url' => Socialite::driver('github')
+                ->stateless()
+                ->redirect()
+                ->getTargetUrl(),
+        ]);
+    }
+
     public function exchangeGithubCode(Request $request)
     {
         $request->validate([
             'code' => 'required|string',
-            'state' => 'required|string',
         ]);
 
         try {
-            // Exchange code for user info
-            $socialUser = Socialite::driver('github')
+            $githubUser = Socialite::driver('github')
                 ->stateless()
-                ->setHttpClient(new \GuzzleHttp\Client(['verify' => false]))
                 ->user();
 
-            $existingUser = User::where('email', $socialUser->getEmail())->first();
-
-            if ($existingUser) {
-                if ($existingUser->provider && $existingUser->provider !== 'github') {
-                    return response()->json([
-                        'status' => 'error',
-                        'message' => 'Email ini sudah terhubung dengan login '.ucfirst($existingUser->provider).'. Silakan gunakan metode tersebut.',
-                    ], 409);
-                }
-
-                if (! $existingUser->provider) {
-                    return response()->json([
-                        'status' => 'error',
-                        'message' => 'Email ini sudah terdaftar dengan login biasa. Silakan gunakan email & password.',
-                    ], 409);
-                }
-
-                $existingUser->update([
-                    'provider_id' => $socialUser->getId(),
-                    'avatar' => $socialUser->getAvatar(),
-                ]);
-
-                $user = $existingUser;
-            } else {
-                $user = User::create([
-                    'name' => $socialUser->getName() ?: 'User',
-                    'email' => $socialUser->getEmail(),
-                    'provider' => 'github',
-                    'provider_id' => $socialUser->getId(),
-                    'avatar' => $socialUser->getAvatar(),
-                    'role' => 'user',
-                    'password' => Hash::make(Str::random(24)),
+            $user = User::updateOrCreate(
+                ['email' => $githubUser->email],
+                [
+                    'name' => $githubUser->name ?? $githubUser->nickname,
+                    'github_id' => $githubUser->id,
+                    'avatar' => $githubUser->avatar,
                     'email_verified_at' => now(),
-                ]);
-            }
+                    'password' => Hash::make(Str::random(24)),
+                ]
+            );
 
-            $token = Auth::login($user);
+            $token = $user->createToken('github-auth')->plainTextToken;
 
             return response()->json([
-                'status' => 'success',
-                'message' => 'OAuth login successful',
-                'user' => $user,
-                'authorization' => [
+                'success' => true,
+                'message' => 'GitHub authentication successful',
+                'data' => [
+                    'user' => $user,
                     'token' => $token,
-                    'expires_in' => Auth::factory()->getTTL() * 60,
-                    'type' => 'bearer',
+                    'token_type' => 'Bearer',
                 ],
             ]);
-
         } catch (\Exception $e) {
             return response()->json([
-                'status' => 'error',
-                'message' => 'OAuth exchange failed: '.$e->getMessage(),
-            ], 500);
+                'success' => false,
+                'message' => 'GitHub authentication failed',
+                'error' => $e->getMessage(),
+            ], 401);
         }
+    }
+
+    // Unlink OAuth Provider
+
+    public function unlinkProvider(Request $request)
+    {
+        $request->validate([
+            'provider' => 'required|in:google,github',
+        ]);
+
+        $user = $request->user();
+        $field = $request->provider.'_id';
+
+        if (! $user->$field) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Provider not linked',
+            ], 400);
+        }
+
+        $user->update([$field => null]);
+
+        return response()->json([
+            'success' => true,
+            'message' => ucfirst($request->provider).' account unlinked successfully',
+        ]);
     }
 }

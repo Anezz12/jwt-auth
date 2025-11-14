@@ -19,11 +19,11 @@ Route::prefix('auth')->group(function () {
 
     // OAuth - Google
     Route::get('/google', [AuthController::class, 'redirectToProvider']);
-    Route::post('/google/callback', [AuthController::class, 'exchangeGoogleCode']);
+    Route::get('/google/callback', [AuthController::class, 'exchangeGoogleCode']);
 
     // OAuth - Github
     Route::get('/github', [AuthController::class, 'redirectToGithub']);
-    Route::post('/github/callback', [AuthController::class, 'exchangeGithubCode']);
+    Route::get('/github/callback', [AuthController::class, 'exchangeGithubCode']);
 });
 
 // Protected Authentication Routes

@@ -22,6 +22,8 @@ class AuthController extends Controller
             'password' => 'required|string|min:8|confirmed',
         ]);
 
+        // Only allow user registration via public API
+        // Admin and author roles should be assigned manually or through admin panel
         $user = User::create([
             'name' => $request->name,
             'email' => $request->email,
@@ -51,9 +53,24 @@ class AuthController extends Controller
 
         $user = User::where('email', $request->email)->first();
 
-        if (! $user || ! Hash::check($request->password, $user->password)) {
+        // Check if user exists and has a password (not OAuth-only account)
+        if (! $user || ! $user->password) {
             throw ValidationException::withMessages([
                 'email' => ['The provided credentials are incorrect.'],
+            ]);
+        }
+
+        // Verify password
+        if (! Hash::check($request->password, $user->password)) {
+            throw ValidationException::withMessages([
+                'email' => ['The provided credentials are incorrect.'],
+            ]);
+        }
+
+        // Check if account is associated with social login only
+        if ($user->provider && ! $user->password) {
+            throw ValidationException::withMessages([
+                'email' => ['This account is registered with '.ucfirst($user->provider).'. Please use '.ucfirst($user->provider).' login.'],
             ]);
         }
 
@@ -113,24 +130,17 @@ class AuthController extends Controller
     public function forgotPassword(Request $request)
     {
         $request->validate([
-            'email' => 'required|email|exists:users,email',
+            'email' => 'required|email',
         ]);
 
-        $status = Password::sendResetLink(
+        Password::sendResetLink(
             $request->only('email')
         );
 
-        if ($status === Password::RESET_LINK_SENT) {
-            return response()->json([
-                'success' => true,
-                'message' => 'Password reset link sent to your email',
-            ]);
-        }
-
         return response()->json([
-            'success' => false,
-            'message' => 'Unable to send reset link',
-        ], 500);
+            'success' => true,
+            'message' => 'If your email is registered, you will receive a password reset link',
+        ]);
     }
 
     public function resetPassword(Request $request)
@@ -169,53 +179,64 @@ class AuthController extends Controller
 
     public function redirectToProvider()
     {
-        return response()->json([
-            'url' => Socialite::driver('google')
-                ->stateless()
-                ->redirect()
-                ->getTargetUrl(),
-        ]);
+        $url = Socialite::driver('google')
+            ->stateless()
+            ->redirect()
+            ->getTargetUrl();
+
+        return response()->json(['url' => $url]);
     }
 
     public function exchangeGoogleCode(Request $request)
     {
-        $request->validate([
-            'code' => 'required|string',
-        ]);
-
         try {
             $googleUser = Socialite::driver('google')
                 ->stateless()
                 ->user();
 
-            $user = User::updateOrCreate(
-                ['email' => $googleUser->email],
-                [
+            // Validate that email exists from OAuth provider
+            if (! $googleUser->email) {
+                throw new \Exception('Email not provided by OAuth provider');
+            }
+
+            $user = User::where('email', $googleUser->email)->first();
+
+            if ($user) {
+                // Update existing user
+                $user->update([
                     'name' => $googleUser->name,
-                    'google_id' => $googleUser->id,
+                    'provider' => 'google',
+                    'provider_id' => $googleUser->id,
                     'avatar' => $googleUser->avatar,
+                    'email_verified_at' => $user->email_verified_at ?? now(),
+                ]);
+            } else {
+                // Create new user
+                $user = User::create([
+                    'name' => $googleUser->name,
+                    'email' => $googleUser->email,
+                    'provider' => 'google',
+                    'provider_id' => $googleUser->id,
+                    'avatar' => $googleUser->avatar,
+                    'role' => 'user',
                     'email_verified_at' => now(),
                     'password' => Hash::make(Str::random(24)),
-                ]
-            );
+                ]);
+            }
 
+            // Delete old tokens and create new one
+            $user->tokens()->delete();
             $token = $user->createToken('google-auth')->plainTextToken;
 
-            return response()->json([
-                'success' => true,
-                'message' => 'Google authentication successful',
-                'data' => [
-                    'user' => $user,
-                    'token' => $token,
-                    'token_type' => 'Bearer',
-                ],
-            ]);
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Google authentication failed',
-                'error' => $e->getMessage(),
-            ], 401);
+            $frontendUrl = env('FRONTEND_URL', 'http://localhost:3000');
+
+            return redirect($frontendUrl.'/oauth/callback?success=true&token='.urlencode($token).'&provider=google');
+
+        } catch (\Exception) {
+            $frontendUrl = env('FRONTEND_URL', 'http://localhost:3000');
+
+            // Don't leak sensitive error details to the frontend
+            return redirect($frontendUrl.'/oauth/callback?success=false&error=authentication_failed');
         }
     }
 
@@ -233,43 +254,54 @@ class AuthController extends Controller
 
     public function exchangeGithubCode(Request $request)
     {
-        $request->validate([
-            'code' => 'required|string',
-        ]);
-
         try {
             $githubUser = Socialite::driver('github')
                 ->stateless()
                 ->user();
 
-            $user = User::updateOrCreate(
-                ['email' => $githubUser->email],
-                [
+            // Validate that email exists from OAuth provider
+            if (! $githubUser->email) {
+                throw new \Exception('Email not provided by OAuth provider');
+            }
+
+            $user = User::where('email', $githubUser->email)->first();
+
+            if ($user) {
+                // Update existing user
+                $user->update([
                     'name' => $githubUser->name ?? $githubUser->nickname,
-                    'github_id' => $githubUser->id,
+                    'provider' => 'github',
+                    'provider_id' => $githubUser->id,
                     'avatar' => $githubUser->avatar,
+                    'email_verified_at' => $user->email_verified_at ?? now(),
+                ]);
+            } else {
+                // Create new user
+                $user = User::create([
+                    'name' => $githubUser->name ?? $githubUser->nickname,
+                    'email' => $githubUser->email,
+                    'provider' => 'github',
+                    'provider_id' => $githubUser->id,
+                    'avatar' => $githubUser->avatar,
+                    'role' => 'user',
                     'email_verified_at' => now(),
                     'password' => Hash::make(Str::random(24)),
-                ]
-            );
+                ]);
+            }
 
+            // Delete old tokens and create new one
+            $user->tokens()->delete();
             $token = $user->createToken('github-auth')->plainTextToken;
 
-            return response()->json([
-                'success' => true,
-                'message' => 'GitHub authentication successful',
-                'data' => [
-                    'user' => $user,
-                    'token' => $token,
-                    'token_type' => 'Bearer',
-                ],
-            ]);
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'GitHub authentication failed',
-                'error' => $e->getMessage(),
-            ], 401);
+            $frontendUrl = env('FRONTEND_URL', 'http://localhost:3000');
+
+            return redirect($frontendUrl.'/oauth/callback?success=true&token='.urlencode($token).'&provider=github');
+
+        } catch (\Exception) {
+            $frontendUrl = env('FRONTEND_URL', 'http://localhost:3000');
+
+            // Don't leak sensitive error details to the frontend
+            return redirect($frontendUrl.'/oauth/callback?success=false&error=authentication_failed');
         }
     }
 
@@ -282,16 +314,29 @@ class AuthController extends Controller
         ]);
 
         $user = $request->user();
-        $field = $request->provider.'_id';
 
-        if (! $user->$field) {
+        // Check if user has password (can still login without OAuth)
+        if (! $user->password && $user->provider) {
             return response()->json([
                 'success' => false,
-                'message' => 'Provider not linked',
+                'message' => 'Cannot unlink OAuth provider. This is your only login method. Please set a password first.',
             ], 400);
         }
 
-        $user->update([$field => null]);
+        // Check if provider is linked
+        if (! $user->provider_id || $user->provider !== $request->provider) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Provider not linked to this account',
+            ], 400);
+        }
+
+        // Unlink the provider
+        $user->update([
+            'provider' => null,
+            'provider_id' => null,
+            'avatar' => null,
+        ]);
 
         return response()->json([
             'success' => true,
